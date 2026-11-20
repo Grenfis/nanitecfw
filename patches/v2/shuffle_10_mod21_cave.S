@@ -4,13 +4,10 @@
     .equ    media_library, 0x0307ad6c
     .equ    open_window,   0x0307ad76
     .equ    empty_notice,  0x0307a7f4
-    .equ    tetris_launch, 0x0307a750
 shuffle_route:
     ldr     r1, =0x0300c36a
     ldr     r2, =0x0300e600
     ldrh    r2, [r2]
-    cmp     r2, #0
-    fbeq    tetris_launch
     cmp     r2, #1
     bne     1f
     ldr     r3, =0x0300c04c

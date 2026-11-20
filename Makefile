@@ -3,6 +3,7 @@
 #   make                 build out/nanitecfw-VERSION-DATE/NANOV170.IMG from stock + patches/ + src/
 #   make FW=path/to/NANOV170.IMG   stock image somewhere else
 #   make DATE=20260901   build date (default 20260825, one day after stock V1.7.0)
+#   make FW=NANOV200.IMG DELETE_TRACK=1   build V2 with deletion from playback
 #   make recovery        unmodified stock code dated 20260826 -> out/recovery/NANOV170.IMG
 #   make check           is the input the expected stock image?
 #   make info / verify / diff / clean
@@ -10,6 +11,7 @@
 FW      ?= NANOV170.IMG
 DATE    ?= 20260825
 TETRIS_DIAGNOSTIC ?= 0
+DELETE_TRACK ?= 0
 PY      := python3
 FWTOOL  := $(PY) tools/rknano_fw.py
 STOCK_NAME := $(shell $(PY) -c 'from tools.rknano_fw import stock_name; print(stock_name("$(FW)") or "")')
@@ -30,7 +32,18 @@ DATE := 20261104
 endif
 endif
 VERSION := $(shell $(PY) -c 'from tools.rknano_fw import parse_patches; print(next(parse_patches(["@$(PATCH_DIR)/about_version.patch"]))[2].decode("utf-16le").rstrip("\0"))')
+ifeq ($(DELETE_TRACK),1)
+ifneq ($(V2_PROFILE),1)
+$(error DELETE_TRACK=1 requires the official V2.0.0 image)
+endif
+VERSION := 2.0.0
+DELETE_DIR := $(GEN_DIR)/delete-track
+OUT ?= out/nanitecfw-delete-track-$(VERSION)-$(DATE)/$(notdir $(FW))
+BASE_OUT := $(DELETE_DIR)/base/$(notdir $(FW))
+else
 OUT     ?= out/nanitecfw-$(VERSION)-$(DATE)/$(notdir $(FW))
+BASE_OUT := $(OUT)
+endif
 
 PATCHES := $(sort $(wildcard $(PATCH_DIR)/*.patch))
 ASM     := $(sort $(wildcard $(PATCH_DIR)/*.S))
@@ -64,8 +77,12 @@ V2_BLOB := $(BLOB)
 endif
 
 build: check $(GEN) $(V2_BLOB) $(GAME)
-	@mkdir -p $(dir $(OUT))
-	$(FWTOOL) patch $(FW) $(OUT) --date $(DATE) $(addprefix @,$(PATCHES) $(GEN) $(V2_BLOB) $(GAME))
+	@mkdir -p $(dir $(BASE_OUT)) $(dir $(OUT))
+	$(FWTOOL) patch $(FW) $(BASE_OUT) --date $(DATE) $(addprefix @,$(PATCHES) $(GEN) $(V2_BLOB) $(GAME))
+ifeq ($(DELETE_TRACK),1)
+	$(PY) tools/build_delete_preview.py $(FW) $(BASE_OUT) $(DELETE_DIR) --enable-writes
+	cp $(DELETE_DIR)/NANOV200-delete-emulator-write-test.IMG $(OUT)
+endif
 	$(FWTOOL) crc $(OUT)
 	@printf '\nBuilt firmware %s (date %s): %s\n' '$(VERSION)' '$(DATE)' '$(OUT)'
 

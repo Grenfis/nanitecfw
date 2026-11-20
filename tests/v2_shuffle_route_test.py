@@ -102,6 +102,16 @@ class ShuffleRouteTests(unittest.TestCase):
         cpu, opened, messages = self.dispatch(3)
         self.assertEqual(opened, [(1, 0, 0)])
 
+    def test_file_browser_uses_stock_menu_entry_and_window(self):
+        image = load(str(IMAGE_PATH))
+        stock = load(str(ROOT / "NANOV200.IMG"))
+        entry, _ = image.region(21, 0x0300E5D0)
+        icon, _ = image.region(0, 0x03072E77)
+        self.assertEqual(image.d[entry:entry + 8], stock.d[entry:entry + 8])
+        self.assertEqual(image.d[icon:icon + 40], stock.d[icon:icon + 40])
+        _, opened, _ = self.dispatch(0)
+        self.assertEqual(opened, [(9, 6, 0)])
+
     def test_playback_keeps_its_stock_window(self):
         cpu, opened, messages = self.dispatch(2)
         self.assertEqual(opened, [(1, 0, 0)])
