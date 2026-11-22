@@ -19,6 +19,6 @@ SECTIONS
         *(.successor_browser)
         *(.successor_data)
     }
-    ASSERT(. <= 0x0309ffa0, "Successor code overlaps the playback-open wrapper")
+    ASSERT(. <= 0x0309ff80, "Successor code overlaps the playback-open wrapper")
     /DISCARD/ : { *(.ARM.exidx*) *(.ARM.attributes) *(.comment) *(.note*) }
 }

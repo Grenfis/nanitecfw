@@ -2,7 +2,7 @@
 #define DELETE_TRACK_MOUNT_H
 
 /* Above nanitecfw's payload RAM and below the stock reboot flag. */
-#define DELETE_TRACK_OPEN_WRAPPER 0x0309ffa0
+#define DELETE_TRACK_OPEN_WRAPPER 0x0309ff80
 #define DELETE_TRACK_MOUNT_STATE 0x0309ffe0
 
 #ifndef __ASSEMBLER__

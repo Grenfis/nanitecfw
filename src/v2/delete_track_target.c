@@ -196,6 +196,43 @@ static enum delete_track_result remove_fat(struct delete_track_target *target)
     return DELETE_TRACK_REMOVED;
 }
 
+static int target_open(const struct delete_track_target *target)
+{
+    for (unsigned handle = 0; handle < 8; handle++) {
+        const volatile uint8_t *file = files + handle * 0x27e;
+        if (file[0] && (read_file_field(file + 0x14) == target->first_cluster ||
+                        (read_file_field(file + 0x0c) == target->directory &&
+                         read_file_field(file + 0x1c) == target->entry)))
+            return 1;
+    }
+    return 0;
+}
+
+enum delete_track_result delete_track_remove(struct delete_track_target *target,
+        const volatile uint32_t *mount_generation, uint32_t generation)
+{
+    if (*mount_generation != generation || storage[0] != target->file_system ||
+        read_file_field(storage + 8) != target->device)
+        return DELETE_TRACK_TARGET_CHANGED;
+    if (target_open(target))
+        return DELETE_TRACK_STILL_OPEN;
+    return target->file_system == 3 ? delete_track_remove_exfat(target) : remove_fat(target);
+}
+
+enum delete_track_result delete_track_stop_and_remove(struct delete_track_target *target,
+        const volatile uint32_t *mount_generation, uint32_t generation)
+{
+    if (stop_playback(1) != 1)
+        return DELETE_TRACK_STOP_FAILED;
+
+    lock_filesystem();
+    enum delete_track_result result = DELETE_TRACK_TARGET_CHANGED;
+    if (*playback_handle == UINT32_MAX)
+        result = delete_track_remove(target, mount_generation, generation);
+    unlock_filesystem();
+    return result == DELETE_TRACK_STILL_OPEN ? DELETE_TRACK_TARGET_CHANGED : result;
+}
+
 enum delete_track_result delete_track_execute(struct delete_track_target *target,
         const volatile uint32_t *mount_generation, uint32_t opened_device, int accepted)
 {
@@ -205,15 +242,5 @@ enum delete_track_result delete_track_execute(struct delete_track_target *target
     unlock_filesystem();
     if (!matched)
         return DELETE_TRACK_REJECTED;
-    if (stop_playback(1) != 1)
-        return DELETE_TRACK_STOP_FAILED;
-
-    lock_filesystem();
-    enum delete_track_result result = DELETE_TRACK_TARGET_CHANGED;
-    if (*playback_handle == UINT32_MAX && files[target->handle * 0x27e] == 0 &&
-        *mount_generation == generation && storage[0] == target->file_system &&
-        read_file_field(storage + 8) == target->device)
-        result = target->file_system == 3 ? delete_track_remove_exfat(target) : remove_fat(target);
-    unlock_filesystem();
-    return result;
+    return delete_track_stop_and_remove(target, mount_generation, generation);
 }

@@ -35,7 +35,17 @@ enum delete_track_result {
     DELETE_TRACK_IO_ERROR,
     DELETE_TRACK_REMOVED,
     DELETE_TRACK_UNSUPPORTED_FILESYSTEM,
+    DELETE_TRACK_STILL_OPEN,
 };
+
+/* Call under the filesystem lock with the generation the confirmation was
+ * checked against. Returns DELETE_TRACK_STILL_OPEN while any file handle,
+ * not only the decoder's, refers to the target. */
+enum delete_track_result delete_track_remove(struct delete_track_target *target,
+        const volatile uint32_t *mount_generation, uint32_t generation);
+/* Stop the decoder, then remove the target. Call without the lock. */
+enum delete_track_result delete_track_stop_and_remove(struct delete_track_target *target,
+        const volatile uint32_t *mount_generation, uint32_t generation);
 
 /* Run from the playback UI task. The mount generation must be owned by the
  * caller and remain readable across the stock decoder shutdown. */

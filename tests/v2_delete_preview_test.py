@@ -18,6 +18,7 @@ WRITE_TEST = ROOT / "out/delete-write-test"
 BASE = ROOT / "out/nanitecfw-6.0.58-20261104/NANOV200.IMG"
 RETURN = 0x03010000
 KEY_CALL = 0x0307CE38
+PLAYBACK_KEYS = 0x0307CE30
 UPDATE_SLOT = 0x0300E5C4
 PLAYBACK_WIDGET = 0x0300E5B4
 CONFIRMATION_WIDGET = 0x03004600
@@ -64,6 +65,8 @@ class DeletePreviewTests(unittest.TestCase):
         self.flash_reads = []
         self.operations = []
         self.windows = []
+        self.decoder_messages = []
+        self.next_file = "advance"
         self.library = {}
         self.entries = {(4, 18): (b"SAME    MP3", 13, 4096)}
 
@@ -155,6 +158,12 @@ class DeletePreviewTests(unittest.TestCase):
                 address == 0x0307AB88 and self.in_browser
             ):
                 result = 0
+            elif address == 0x03081D92:
+                message = machine.reg_read(UC_ARM_REG_R0), machine.reg_read(UC_ARM_REG_R1)
+                self.decoder_messages.append(message)
+                if message == (0x110, 1):
+                    self.skip_to_next_file()
+                result = 0
             elif address in (0x0308331C, 0x0305F392, 0x0305F41E, 0x0305E75C, 0x0305ADD6, 0x0306B302):
                 self.assertEqual(suffix, "write-test")
                 self.operations.append(address)
@@ -163,8 +172,10 @@ class DeletePreviewTests(unittest.TestCase):
                 result = 0
                 if address == 0x0308331C:
                     self.assertEqual(r0, 1)
+                    handle = self.word(0x030045AC)
+                    self.assertLess(handle, 8)
+                    machine.mem_write(0x03078844 + handle * 0x27E, b"\0")
                     self.store(0x030045AC, 0xffffffff)
-                    machine.mem_write(0x03078844, b"\0")
                     result = 1
                 elif address == 0x0305F392:
                     self.assertEqual((r0, bytes(machine.mem_read(r1, 11))), (4, b"SAME    MP3"))
@@ -185,6 +196,22 @@ class DeletePreviewTests(unittest.TestCase):
             machine.reg_write(UC_ARM_REG_PC, machine.reg_read(UC_ARM_REG_LR))
 
         self.cpu.hook_add(UC_HOOK_CODE, emulate_hardware)
+
+    def skip_to_next_file(self):
+        """Model the stock decoder closing the playing file and opening the next one."""
+        handle = self.word(0x030045AC)
+        playing = 0x03078844 + handle * 0x27E
+        if self.next_file == "advance":
+            # The next file usually reuses the freed handle.
+            self.cpu.mem_write(playing, b"\x01NEXT    MP3")
+            self.cpu.mem_write(playing + 0x0C, struct.pack("<IIIII", 7, 5120, 34, 0, 23))
+        elif self.next_file == "reopen":
+            other = 0x03078844 + (handle ^ 1) * 0x27E
+            self.cpu.mem_write(other, bytes(self.cpu.mem_read(playing, 0x27E)))
+            self.cpu.mem_write(playing, b"\0")
+            self.store(0x030045AC, handle ^ 1)
+        else:
+            self.assertEqual(self.next_file, "ignore")
 
     def store(self, address, value):
         self.cpu.mem_write(address, struct.pack("<I", value))
@@ -328,6 +355,9 @@ class DeletePreviewTests(unittest.TestCase):
                 self.key = 0x40000040
                 self.call(0x03058A44)
                 self.call(self.word(UPDATE_SLOT) & ~1)
+                self.assertEqual(self.word(self.symbols["delete_preview_answer"]), 1)
+                self.key = 0
+                self.run_playback_keys()
                 self.assertEqual(self.word(self.symbols["delete_preview_answer"]), 4 if variant == "write-test" else 1)
 
     def test_preview_reports_when_the_playing_file_cannot_be_verified(self):
@@ -338,43 +368,83 @@ class DeletePreviewTests(unittest.TestCase):
         self.assertEqual(self.word(PLAYBACK_WIDGET), 0x03004654)
         self.assertEqual(self.word(0x030045AC), 0)
 
-    def test_write_fixture_handles_cancel_and_uses_stock_refresh_after_yes(self):
+    def run_playback_keys(self):
+        self.call(PLAYBACK_KEYS)
+        # Blocks cached by this run continue past KEY_CALL + 4, so a later stop there would be missed.
+        self.cpu.ctl_flush_tb()
+
+    def answer(self, accepted):
+        self.press_play_twice()
+        if accepted:
+            self.key = 0x40000004
+            self.call(0x03058A44)
+        self.key = 0x40000040
+        self.call(0x03058A44)
+        self.key = 0
+        self.call(self.word(UPDATE_SLOT) & ~1)
+        self.assertEqual(self.word(self.symbols["delete_preview_answer"]), int(accepted))
+
+    def test_yes_moves_to_the_next_track_and_deletes_the_closed_file(self):
+        for volume in (2, 4):
+            with self.subTest(volume=volume):
+                self.prepare("write-test")
+                self.volume = volume
+                self.load_playback()
+                self.cpu.mem_write(0x0300C0B8, b"\x01")
+                self.answer(False)
+                self.run_playback_keys()
+                self.assertEqual((self.operations, self.decoder_messages), ([], []))
+
+                self.answer(True)
+                self.assertEqual(self.operations, [])
+                self.run_playback_keys()
+                self.assertEqual(self.decoder_messages, [(0x110, 1)])
+                self.assertEqual(self.operations, [0x0305F392, 0x0305E75C])
+                self.assertEqual(self.word(self.symbols["delete_preview_answer"]), 4)
+                self.assertEqual(self.cpu.mem_read(0x0300BFB6, 2), b"\0\0")
+                # The main menu rebuilds the library later, as after the file manager.
+                self.assertEqual(self.cpu.mem_read(0x0300C08E, 2), b"\x01\0")
+                self.assertEqual(self.cpu.mem_read(0x0300C0B8, 1), b"\x01")
+                self.assertEqual(self.windows, [])
+                self.assertEqual(bytes(self.cpu.mem_read(0x03078844, 12)), b"\x01NEXT    MP3")
+
+                self.run_playback_keys()
+                self.assertEqual(len(self.decoder_messages), 1)
+
+    def test_next_that_keeps_the_file_stops_like_the_file_manager(self):
+        for next_file in ("ignore", "reopen"):
+            with self.subTest(next_file=next_file):
+                self.prepare("write-test")
+                self.load_playback()
+                self.next_file = next_file
+                self.cpu.mem_write(0x0300C0B8, b"\x01")
+                self.answer(True)
+                self.run_playback_keys()
+                self.assertEqual(self.decoder_messages, [(0x110, 1)])
+                self.assertEqual(self.operations, [0x0308331C, 0x0305F392, 0x0305E75C, 0x0306B302])
+                self.assertEqual(self.windows, [(0, bytes(32))])
+                self.assertEqual(self.word(self.symbols["delete_preview_answer"]), 4)
+                self.assertEqual(self.cpu.mem_read(0x0300C08E, 2), b"\x01\0")
+                self.assertEqual(self.cpu.mem_read(0x0300C0B8, 1), b"\0")
+
+    def test_remount_after_yes_keeps_the_track_and_the_file(self):
         self.prepare("write-test")
         self.load_playback()
-        for accepted in (False, True):
-            self.press_play_twice()
-            if accepted:
-                self.key = 0x40000004
-                self.call(0x03058A44)
-            self.key = 0x40000040
-            self.call(0x03058A44)
-            self.call(self.word(UPDATE_SLOT) & ~1)
-            self.assertEqual(self.word(self.symbols["delete_preview_answer"]), 4 if accepted else 0)
-            if not accepted:
-                self.assertEqual(self.operations, [])
-        self.assertEqual(self.operations, [0x0308331C, 0x0305F392, 0x0305E75C, 0x0305ADD6, 0x0306B302])
-        self.assertEqual(self.windows, [(0x0d, struct.pack("<H28xH", 1, 0x6a00))])
-        self.assertEqual(self.cpu.mem_read(0x0300C08E, 2), b"\x01\0")
-        self.assertEqual(self.cpu.mem_read(0x0300C0B8, 1), b"\0")
+        self.answer(True)
+        self.call(0x0305BE3C)
+        self.run_playback_keys()
+        self.assertEqual((self.operations, self.decoder_messages), ([], []))
+        self.assertEqual(self.word(self.symbols["delete_preview_answer"]), 2)
+        self.assertEqual(self.cpu.mem_read(0x0300C08E, 2), b"\0\0")
 
-    def test_refresh_targets_the_card_and_skips_scanning_if_it_cannot_mount(self):
-        for mount_result in (0, -1):
-            with self.subTest(mount_result=mount_result):
-                self.prepare("write-test")
-                self.volume = 4
-                self.mount_result = mount_result
-                self.load_playback()
-                self.press_play_twice()
-                self.key = 0x40000004
-                self.call(0x03058A44)
-                self.key = 0x40000040
-                self.call(0x03058A44)
-                self.call(self.word(UPDATE_SLOT) & ~1)
-                self.assertEqual(self.word(self.symbols["delete_preview_answer"]), 4)
-                self.assertEqual(self.operations[-1], 0x0306B302 if not mount_result else 0x0305ADD6)
-                self.assertEqual(self.cpu.mem_read(0x0300C08E, 1), bytes([not mount_result]))
-                if not mount_result:
-                    self.assertEqual(self.cpu.mem_read(0x0300C05A, 1), b"\x04")
+    def test_playback_refuses_a_deleted_entry_the_old_library_still_lists(self):
+        self.prepare("write-test")
+        self.load_playback()
+        self.cpu.mem_write(0x03078844, b"\0")
+        self.entries[4, 18] = (b"\xe5AME    MP3", 13, 4096)
+        self.assertEqual(self.call(0x03085C08, 0x03085C4C), 0xffffffff)
+        self.assertEqual(self.cpu.mem_read(0x03078844, 1), b"\0")
+        self.assertEqual(self.word(MOUNT_STATE + 4), 0)
 
     def all_songs_queue(self, shuffle=False):
         queue = bytearray(0x120)
@@ -428,14 +498,20 @@ class DeletePreviewTests(unittest.TestCase):
         finally:
             self.stock_key_input = False
 
-    def confirm_removal(self):
-        self.press_play_twice()
-        self.key = 0x40000004
-        self.call(0x03058A44)
-        self.key = 0x40000040
-        self.call(0x03058A44)
-        self.call(self.word(UPDATE_SLOT) & ~1)
-        self.assertEqual(self.word(self.symbols["delete_preview_answer"]), 4)
+    def arm_successor_refresh(self):
+        """Stop, record the successor and open the refresh, as removal did up to 20261202."""
+        target = 0x0303E000
+        capture = self.symbols["delete_track_capture"]
+        self.assertEqual(self.call(capture, r0=target, r1=self.word(MOUNT_STATE), r2=self.word(MOUNT_STATE + 4)), 1)
+        self.store(0x030045AC, 0xffffffff)
+        self.cpu.mem_write(0x03078844, b"\0")
+        self.call(self.symbols["delete_track_prepare_successor"], r0=target)
+        self.cpu.mem_write(0x0300C05A, bytes([self.volume]))
+        self.cpu.mem_write(0x0300C0B8, b"\0")
+        self.cpu.mem_write(0x0300C08E, b"\x01\0")
+        descriptor = struct.pack("<H28xH", 1, 0x6a00)
+        self.windows.append((0x0d, descriptor))
+        self.cpu.mem_write(0x03004B10, descriptor)
 
     def finish_refresh(self):
         self.store(0x0300E5D4, 1)
@@ -492,7 +568,7 @@ class DeletePreviewTests(unittest.TestCase):
                 self.volume = 4
                 self.load_playback()
                 self.all_songs_queue()
-                self.confirm_removal()
+                self.arm_successor_refresh()
 
                 self.call(0x0306B754, r0=5, r1=7)
                 self.cpu.mem_write(0x0307D9D8, bytes(0xd4c))
@@ -538,7 +614,7 @@ class DeletePreviewTests(unittest.TestCase):
         self.cpu.mem_write(0x0300C836, struct.pack("<H", 0xe))
         self.cpu.mem_write(0x0300D140, struct.pack("<H", 5))
         self.cpu.mem_write(0x0300D144, struct.pack("<10I", 7, 24, 8, 4, 4, 19, 7, 24, 4, 19))
-        self.confirm_removal()
+        self.arm_successor_refresh()
 
         self.call(0x0306B754, r0=5, r1=7)
         self.call(0x0306C0B6)
@@ -568,7 +644,7 @@ class DeletePreviewTests(unittest.TestCase):
         self.cpu.mem_write(0x0300C744, bytes(queue))
         self.cpu.mem_write(0x0300C084, struct.pack("<H", 2))
         self.favorites = struct.pack("<4I3984xII88x", 4, 19, 7, 24, 2, 0x55aa55aa)
-        self.confirm_removal()
+        self.arm_successor_refresh()
 
         self.call(0x0306B754, r0=5, r1=7)
         self.favorites = struct.pack("<4I3984xII88x", 8, 4, 7, 24, 2, 0x55aa55aa)
@@ -593,7 +669,7 @@ class DeletePreviewTests(unittest.TestCase):
                 struct.pack_into("<H", queue, 0x110 + 2 * depth, 4)
                 self.cpu.mem_write(0x0300C744, bytes(queue))
                 self.library[((24 + map_offset) << 9) + 8] = struct.pack("<2H", 6, 9)
-                self.confirm_removal()
+                self.arm_successor_refresh()
 
                 self.call(0x0306B754, r0=5, r1=7)
                 self.replace_index(self.volume)
@@ -625,7 +701,7 @@ class DeletePreviewTests(unittest.TestCase):
         self.cpu.mem_write(0x0300C744, bytes(queue))
         self.cpu.mem_write(0x0300C0B9, b"\x02\0\0")
         self.library[((24 + 0x52020) << 9) + 8] = struct.pack("<2H", 6, 9)
-        self.confirm_removal()
+        self.arm_successor_refresh()
 
         self.call(0x0306B754, r0=5, r1=7)
         self.replace_index(self.volume)
@@ -683,7 +759,7 @@ class DeletePreviewTests(unittest.TestCase):
                 self.library[((24 + 0x521e0) << 9) + 8] = struct.pack("<2H", 6, 9)
                 self.library[(24 + 0x52200) << 9] = struct.pack("<4H", 5 - scope, 0, 2, scope + 1)
                 self.cpu.mem_write(0x0300C082, struct.pack("<H", 1))
-                self.confirm_removal()
+                self.arm_successor_refresh()
 
                 self.library.clear()
                 records = [
@@ -713,7 +789,7 @@ class DeletePreviewTests(unittest.TestCase):
         struct.pack_into("<I", queue, 0xfc, 24 + 0x52140)
         self.cpu.mem_write(0x0300C744, bytes(queue))
         self.library[(24 + 0x52140) << 9] = struct.pack("<2H", 6, 9)
-        self.confirm_removal()
+        self.arm_successor_refresh()
 
         self.library.clear()
         self.sort_stock_library(30, [

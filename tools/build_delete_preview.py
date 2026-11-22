@@ -54,7 +54,7 @@ def build(stock, base, output, enable_writes=False):
     symbols = subprocess.check_output(["arm-none-eabi-nm", "-g", str(elf)], text=True)
     (output / "delete-preview.nm").write_text(symbols)
     addresses = {symbol: int(value, 16) for value, _, symbol in map(str.split, symbols.splitlines())}
-    if ("delete_track_execute" in addresses) != enable_writes:
+    if ("delete_track_remove" in addresses) != enable_writes:
         raise ValueError("incorrect removal routines linked into the image")
 
     key_address = 0x0307ce38
@@ -80,7 +80,7 @@ def build(stock, base, output, enable_writes=False):
     original_offset = image.l2f(overlay["code_load"])
     relocated = image.d[original_offset:original_offset + overlay["code_len"]] + binary.read_bytes()
     open_module, open_address, open_code = assemble("delete_track_open", output)
-    if (open_module, open_address, len(open_code)) != (34, 0x0309ffa0, 0x40):
+    if (open_module, open_address, len(open_code)) != (34, 0x0309ff80, 0x60):
         raise ValueError("unexpected playback-open wrapper placement")
     if image.modules[34] != stock_image.modules[34] or image.modules[34]["data_len"]:
         raise ValueError("unexpected playback-open overlay layout")
