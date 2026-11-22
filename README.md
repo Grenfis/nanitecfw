@@ -7,6 +7,7 @@ Custom firmware for the FiiO Echo Nano, supporting official **V1.7.0** and **V2.
 ## What changes
 
 - Adds Shuffle All for the full song library.
+- V2 shuffles playback queues of up to 8192 tracks without repeats in each pass, using a pseudorandom generator seeded once per boot. Larger queues use random picks that avoid immediate repeats.
 - Makes playback sequential when starting an album or a song inside an album. **Play All** from an artist uses shuffle; other lists retain their selected mode.
 - Skips unsupported tracks without repeatedly showing a popup.
 - Optionally deletes the current track from the V2 playback screen.

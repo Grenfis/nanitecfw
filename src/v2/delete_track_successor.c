@@ -2,6 +2,7 @@
 #include "delete_track_mount.h"
 #include "delete_track_successor.h"
 #include "delete_track_target.h"
+#include "shuffle_random.h"
 
 /* V2.0.0. Run with the decoder stopped, the old queue still active and the
  * filesystem lock held. Refresh can change both the queue and the mount. */
@@ -15,6 +16,7 @@
 #define unlock_filesystem STOCK(0x0306a4fe, void, void)
 #define open_window STOCK(0x0306b302, int, unsigned, const uint16_t *)
 #define get_key STOCK(0x030632da, uint32_t, void)
+#define shuffle_random_below STOCK(SHUFFLE_RANDOM_BELOW, uint32_t, uint32_t)
 #define watchdog STOCK(0x03065898, void, void)
 #define load_favorites STOCK(0x0306c24a, void, void)
 #define mounted_device (*(volatile uint32_t *)0x03077d08)
@@ -480,6 +482,7 @@ uint32_t delete_track_browser_key(void)
 {
     uint32_t key = get_key();
     volatile uint16_t *title = (volatile uint16_t *)0x03004b12;
+    volatile uint16_t *browser_title = (volatile uint16_t *)0x0300e704;
     volatile uint16_t *list = (volatile uint16_t *)0x0300e968;
     if (*title != 0x82)
         return key;
@@ -487,7 +490,7 @@ uint32_t delete_track_browser_key(void)
         unsigned kind = request.song.kind;
         unsigned scope = request.song.scope;
         int flat = scope < group_depth(kind);
-        *title = kind == M3U ? 0x5e : kind == FAVORITES ? 0x61 :
+        *title = *browser_title = kind == M3U ? 0x5e : kind == FAVORITES ? 0x61 :
                 kind >= 3 && kind <= 5 ? 0x58 + kind : 0x5a;
         unsigned row = request.row;
         uint32_t cookie = request.cookie;
@@ -506,10 +509,14 @@ uint32_t delete_track_browser_key(void)
         request.cookie = LAUNCH_PENDING;
         return 0x40000040;
     }
-    *title = 0x5a;
+    /* The browser also passes its saved title to playback for Back. */
+    *title = *browser_title = 0x5a;
     if (!list[0])
         return key;
-    list[0xb] = *(volatile uint32_t *)0xe000e018 % list[0];
+    unsigned row = shuffle_random_below(list[0]);
+    /* The stock launcher uses the depth-zero cursor for All Songs. */
+    list[6] = row;
+    list[0xb] = row;
     return 0x40000040;
 }
 

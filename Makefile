@@ -114,7 +114,7 @@ ifeq ($(V2_PROFILE),0)
 out/gen/%.patch: patches/%.S patches/fw.inc out/gen/syms.inc out/gen/tetris_syms.inc tools/asm2patch.sh
 	tools/asm2patch.sh $< $@
 else
-$(GEN_DIR)/%.patch: patches/v2/%.S patches/v2/fw.inc $(GEN_DIR)/tetris_syms.inc tools/asm2patch.sh
+$(GEN_DIR)/%.patch: patches/v2/%.S patches/v2/fw.inc src/v2/shuffle_random.h $(GEN_DIR)/tetris_syms.inc tools/asm2patch.sh
 	tools/asm2patch.sh $< $@
 endif
 

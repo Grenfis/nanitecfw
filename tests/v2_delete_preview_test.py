@@ -45,6 +45,7 @@ class DeletePreviewTests(unittest.TestCase):
         self.image, self.symbols = self.variants[suffix]
         self.cpu = Uc(UC_ARCH_ARM, UC_MODE_MCLASS | UC_MODE_THUMB)
         self.cpu.mem_map(0x03000000, 0x100000)
+        self.cpu.mem_map(0xe000e000, 0x1000)
         kernel = self.image.modules[0]
         for kind in ("code", "data"):
             offset = self.image.l2f(kernel[kind + "_load"])
@@ -390,6 +391,7 @@ class DeletePreviewTests(unittest.TestCase):
             self.cpu.mem_write(0x03035400, struct.pack("<5H", 1, 0, 1, 2, 3))
             self.cpu.mem_write(0x03039402, struct.pack("<2H", 4, 0))
             self.store(0x0300C02C, 0)
+            self.store(0xE000E018, 2)
         self.library = {
             (24 + 0x52000) << 9: struct.pack("<4H", 6, 8, 9, 10) if shuffle else struct.pack("<2H", 6, 9),
             (24 << 9) + (9 << 11): struct.pack("<II", 7, 24) + bytes(0x7f8),
@@ -743,15 +745,38 @@ class DeletePreviewTests(unittest.TestCase):
         self.assertEqual([window for window, _ in self.windows], [1])
         self.assertEqual(self.flash_reads, [])
 
+        self.replace_index(self.volume)
+        self.cpu.mem_write(0x0300C07A, struct.pack("<H", 3))
+        self.call(0x0306B754, r0=21, r1=7)
+        self.cpu.mem_write(0x0300E600, b"\x01\0")
+        self.call(0x0307ACFA)
+        self.assertEqual((self.windows[-1][0], self.windows[-1][1][:4]), (2, b"\0\0\x82\0"))
+
         self.call(0x0306B754, r0=23, r1=7)
         self.in_browser = True
-        self.cpu.mem_write(0x03004B12, struct.pack("<H", 0x82))
-        self.cpu.mem_write(0x0300E968, struct.pack("<H", 5))
-        self.cpu.mem_map(0xe000e000, 0x1000)
-        self.store(0xe000e018, 12)
-        self.assertEqual(self.call(0x0307B180), 0x40000040)
-        self.assertEqual(self.cpu.mem_read(0x0300E97E, 2), b"\x02\0")
+        self.call(0x0307B130, r0=0x03004B10)
+        self.call(0x0307D20A)
+        self.assertEqual(self.cpu.mem_read(0x0300E968, 2), b"\x03\0")
+        self.assertEqual(self.cpu.mem_read(0x0300E974, 2), b"\0\0")
+        self.store(0xE000E018, 2)
+        self.call(0x0307CACE)
+        window, playback = self.windows[-1]
+        self.assertEqual((window, playback[:4]), (3, b"\x02\0\x5a\0"))
+        self.assertEqual(self.cpu.mem_read(0x0300C744, 4), struct.pack("<HH", 3, 2))
+        self.assertEqual(self.word(0x0300C778), 7)
+        self.assertEqual(self.word(0x0300C77C), 24)
+        self.assertEqual(self.cpu.mem_read(0x0300E97E, 2), b"\x01\0")
+
+        self.in_browser = False
+        self.call(0x0306B754, r0=27, r1=7)
+        self.cpu.mem_write(0x0300C000, playback[2:4])
+        self.key = 0x40001000  # Back event on the playback screen.
+        self.call(self.word(0x0300E5C0) & ~1)
+        self.assertEqual((self.windows[-1][0], self.windows[-1][1][:4]), (2, b"\x01\0\x5a\0"))
+        self.call(0x0306B754, r0=23, r1=7)
+        self.key = 0
         self.assertEqual(self.call(0x0307B180), 0)
+        self.assertEqual(self.cpu.mem_read(0x0300C744, 4), struct.pack("<HH", 3, 2))
 
 if __name__ == "__main__":
     unittest.main()
